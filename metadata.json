@@ -1,0 +1,8 @@
+{
+  "name": "AI Data Cleaning Suite",
+  "description": "Professional browser-based PWA for cleaning, standardizing, validating, and batch-processing Indian Excel and CSV datasets locally.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
