@@ -1,5 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Sliders,
+  Sparkles,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  FileSpreadsheet,
+  Layers,
+  Settings2,
+  Table as TableIcon,
+  ShieldAlert,
+  FileText,
+  Download,
+} from 'lucide-react';
+import {
   AppSettings,
   BankAutoCorrectSummary,
   BankMapping,
@@ -37,6 +51,7 @@ import {
   loadBankMasterDirectory,
   saveBankMasterDirectory,
   autoCorrectBankAndIfscInDataset,
+  extractAndLearnBankMasterFromRows,
 } from './utils/bankMasterEngine';
 import {
   clearStoredDirectoryHandle,
@@ -65,6 +80,7 @@ import { DataCorrectionModal } from './components/DataCorrectionModal';
 import { FindReplaceModal } from './components/FindReplaceModal';
 import { ChangesModal } from './components/ChangesModal';
 import { AutoCorrectReportModal } from './components/AutoCorrectReportModal';
+import { CollapsibleSection } from './components/CollapsibleSection';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
 export default function App() {
@@ -74,6 +90,24 @@ export default function App() {
   const [bankMasterList, setBankMasterList] = useState<BankMasterEntry[]>(loadBankMasterDirectory);
   const [profiles, setProfiles] = useState<CleaningProfile[]>(loadProfiles);
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx');
+
+  // Automatic Bank Data Extraction Notification
+  const [bankAutoLearnNotification, setBankAutoLearnNotification] = useState<string | null>(null);
+
+  // Collapsible Sections Management
+  // Requirement: "यातील प्रत्येक section minimise करण्याची सुविधा दया म्हणजे आवश्यक तेवढाच भाग दिसेल कारण ३,6, 7 हे वारंवार लागणार नाहीत किंवा त्यांची जास्त आवश्यकता नाही"
+  const [collapsedSections, setCollapsedSections] = useState<{ [key: string]: boolean }>(() => {
+    try {
+      const raw = localStorage.getItem('ai_data_cleaner_collapsed_sections');
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    // Default 3, 6, and 7 to collapsed per user instruction!
+    return {
+      section3: true,
+      section6: true,
+      section7: true,
+    };
+  });
 
   const [files, setFiles] = useState<FileItem[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
@@ -157,7 +191,7 @@ export default function App() {
         // Auto detect rules for new file
         let detected: ColumnRuleMap = {};
         if (settings.autoDetectColumns) {
-          detected = autoDetectAllColumns(item.headers);
+          detected = autoDetectAllColumns(item.headers, item.originalData);
         } else {
           item.headers.forEach((h) => {
             detected[h] = ['Trim'];
@@ -177,6 +211,15 @@ export default function App() {
             removeBlankCols: settings.removeBlankCols,
           }
         );
+
+        // Automatically extract authentic bank data & IFSC from uploaded file
+        // Requirement: "अपलोड करण्यात येत असलेल्या file मधुन बँकेचा correct data application मध्ये ॲड करा (automatic)"
+        const extraction = extractAndLearnBankMasterFromRows(item.headers, item.originalData, bankMasterList);
+        if (extraction.newEntriesAdded.length > 0) {
+          setBankMasterList(extraction.updatedMasterList);
+          saveBankMasterDirectory(extraction.updatedMasterList);
+          setBankAutoLearnNotification(extraction.summaryMessage);
+        }
 
         newFileItems.push({
           ...item,
@@ -205,10 +248,45 @@ export default function App() {
     }
   };
 
+  // Section minimize/expand controls
+  // Requirement: "यातील प्रत्येक section minimise करण्याची सुविधा दया म्हणजे आवश्यक तेवढाच भाग दिसेल कारण ३,6, 7 हे वारंवार लागणार नाहीत किंवा त्यांची जास्त आवश्यकता नाही"
+  const toggleSection = (sectionKey: string) => {
+    setCollapsedSections((prev) => {
+      const updated = { ...prev, [sectionKey]: !prev[sectionKey] };
+      try {
+        localStorage.setItem('ai_data_cleaner_collapsed_sections', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+  };
+
+  const expandAllSections = () => {
+    setCollapsedSections({});
+    try {
+      localStorage.setItem('ai_data_cleaner_collapsed_sections', JSON.stringify({}));
+    } catch (e) {}
+  };
+
+  const focusModeSections = () => {
+    const focusState = { section3: true, section6: true, section7: true };
+    setCollapsedSections(focusState);
+    try {
+      localStorage.setItem('ai_data_cleaner_collapsed_sections', JSON.stringify(focusState));
+    } catch (e) {}
+  };
+
   // Load sample dataset with immediate validationGrid
   const handleLoadSample = () => {
     const sample = createSampleFarmerFile();
-    const detected = autoDetectAllColumns(sample.headers);
+    const detected = autoDetectAllColumns(sample.headers, sample.originalData);
+
+    // Automatically extract authentic bank data & IFSC from sample file too
+    const extraction = extractAndLearnBankMasterFromRows(sample.headers, sample.originalData, bankMasterList);
+    if (extraction.newEntriesAdded.length > 0) {
+      setBankMasterList(extraction.updatedMasterList);
+      saveBankMasterDirectory(extraction.updatedMasterList);
+      setBankAutoLearnNotification(extraction.summaryMessage);
+    }
 
     const result = processDataset(
       sample.headers,
@@ -335,7 +413,10 @@ export default function App() {
 
   const handleAutoDetectColumns = () => {
     if (!activeFile) return;
-    const detected = autoDetectAllColumns(activeFile.headers);
+    const detected = autoDetectAllColumns(
+      activeFile.headers,
+      activeFile.originalData
+    );
     handleChangeColumnRules(detected);
   };
 
@@ -1104,96 +1185,248 @@ export default function App() {
 
       {/* Main Workspace Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* Automatic Bank Data Learning Notification Banner */}
+        {bankAutoLearnNotification && (
+          <div className="p-3 sm:p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 rounded-2xl flex items-center justify-between text-xs font-semibold shadow-xs animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>{bankAutoLearnNotification}</span>
+            </div>
+            <button
+              onClick={() => setBankAutoLearnNotification(null)}
+              className="p-1 rounded-lg text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 font-bold"
+              title="बंद करा"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Top Metric Dashboard Cards */}
         <DashboardStatsCards files={files} activeFile={activeFile} />
 
+        {/* Workspace Section Minimization Bar */}
+        {/* Requirement: "यातील प्रत्येक section minimise करण्याची सुविधा दया म्हणजे आवश्यक तेवढाच भाग दिसेल कारण ३,6, 7 हे वारंवार लागणार नाहीत किंवा त्यांची जास्त आवश्यकता नाही" */}
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <Sliders className="w-4 h-4 text-blue-600" />
+            <span className="font-bold text-slate-800 dark:text-slate-200">
+              विभाग दृश्य व्यवस्थापन (Workspace View):
+            </span>
+            <button
+              onClick={focusModeSections}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 font-bold border border-blue-200 dark:border-blue-800 transition shadow-xs"
+              title="वारंवार न लागणारे विभाग ३, ६, ७ लपवा (Focus Mode)"
+            >
+              <span>🎯 फोकस मोड (३, ६, ७ लपवा)</span>
+            </button>
+            <button
+              onClick={expandAllSections}
+              className="px-3 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium border border-slate-200 dark:border-slate-700 transition shadow-xs"
+            >
+              सर्व उघडा (Expand All)
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+            टीप: प्रत्येक विभागाच्या उजव्या बाजूला <strong>लपवा (Minimise)</strong> किंवा <strong>उघडा (Expand)</strong> पर्याय आहे.
+          </span>
+        </div>
+
         {/* 1. File Selection Section */}
-        <FileSelector
-          onFilesSelected={handleFilesSelected}
-          outputDirectoryHandle={outputDirectoryHandle}
-          outputDirectoryName={outputDirectoryName}
-          onSelectOutputFolder={handleSelectOutputFolder}
-          settings={settings}
-          onUpdateSettings={handleUpdateSettings}
-          onLoadSample={handleLoadSample}
-        />
+        <CollapsibleSection
+          id="sec-1"
+          sectionNumber="1"
+          title="File Selection (फाईल्स व आउटपुट फोल्डर निवडा)"
+          subtitle="स्थानिक एक्सेल/CSV फाईल्स किंवा संपूर्ण फोल्डर निवडा"
+          isCollapsed={!!collapsedSections.section1}
+          onToggle={() => toggleSection('section1')}
+          icon={<FileSpreadsheet className="w-4 h-4 text-blue-600" />}
+        >
+          <FileSelector
+            onFilesSelected={handleFilesSelected}
+            outputDirectoryHandle={outputDirectoryHandle}
+            outputDirectoryName={outputDirectoryName}
+            onSelectOutputFolder={handleSelectOutputFolder}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onLoadSample={handleLoadSample}
+          />
+        </CollapsibleSection>
 
         {/* 2. File Queue Section */}
-        <FileQueue
-          files={files}
-          activeFileId={activeFileId}
-          onSelectActiveFile={(id) => {
-            setActiveFileId(id);
-          }}
-          selectedFileIds={selectedFileIds}
-          onToggleSelectFile={handleToggleSelectFile}
-          onSelectAllFiles={handleSelectAllFiles}
-          onRemoveSelected={handleRemoveSelected}
-          onClearAll={handleClearAll}
-          onRemoveSingle={handleRemoveSingle}
-        />
+        <CollapsibleSection
+          id="sec-2"
+          sectionNumber="2"
+          title="File Queue (प्रक्रियेसाठी फाईल्सची यादी)"
+          badge={files.length > 0 ? `${files.length} Files` : undefined}
+          badgeColor="blue"
+          isCollapsed={!!collapsedSections.section2}
+          onToggle={() => toggleSection('section2')}
+          icon={<Layers className="w-4 h-4 text-indigo-600" />}
+        >
+          <FileQueue
+            files={files}
+            activeFileId={activeFileId}
+            onSelectActiveFile={(id) => {
+              setActiveFileId(id);
+            }}
+            selectedFileIds={selectedFileIds}
+            onToggleSelectFile={handleToggleSelectFile}
+            onSelectAllFiles={handleSelectAllFiles}
+            onRemoveSelected={handleRemoveSelected}
+            onClearAll={handleClearAll}
+            onRemoveSingle={handleRemoveSingle}
+          />
+        </CollapsibleSection>
 
-        {/* 3. Cleaning & Validation Rules */}
-        <CleaningRules
-          activeFile={activeFile}
-          columnRules={currentActiveRules}
-          onChangeColumnRules={handleChangeColumnRules}
-          onAutoDetectColumns={handleAutoDetectColumns}
-          autoApply={settings.autoApplyDetectedRules}
-          onToggleAutoApply={(val) =>
-            handleUpdateSettings({ autoApplyDetectedRules: val })
+        {/* 3. Cleaning & Validation Rules (Default Minimised) */}
+        <CollapsibleSection
+          id="sec-3"
+          sectionNumber="3"
+          title="Cleaning & Validation Rules (नियम व प्रमाणिकरण)"
+          subtitle="स्तंभनिहाय नियम, स्वयंचलित ओळख, तारीख, मोबाईल, आधार, IFSC नियम"
+          badge={activeFile ? `${Object.keys(currentActiveRules).length} Rules` : undefined}
+          badgeColor="purple"
+          isCollapsed={!!collapsedSections.section3}
+          onToggle={() => toggleSection('section3')}
+          icon={<Settings2 className="w-4 h-4 text-purple-600" />}
+          summaryWhenCollapsed={
+            activeFile ? (
+              <span className="text-purple-700 dark:text-purple-300 font-medium">
+                सक्रिय फाईल: {Object.keys(currentActiveRules).length} स्तंभांचे नियम सेट केलेले आहेत.
+              </span>
+            ) : undefined
           }
-        />
+        >
+          <CleaningRules
+            activeFile={activeFile}
+            columnRules={currentActiveRules}
+            onChangeColumnRules={handleChangeColumnRules}
+            onAutoDetectColumns={handleAutoDetectColumns}
+            autoApply={settings.autoApplyDetectedRules}
+            onToggleAutoApply={(val) =>
+              handleUpdateSettings({ autoApplyDetectedRules: val })
+            }
+          />
+        </CollapsibleSection>
 
         {/* 4. Batch Processing Engine Controls */}
-        <BatchProcessor
-          files={files}
-          isProcessing={isProcessing}
-          isPaused={isPaused}
-          currentProcessingIndex={currentProcessingIndex}
-          onStartProcessing={handleStartProcessing}
-          onPauseProcessing={handlePauseProcessing}
-          onResumeProcessing={handleResumeProcessing}
-          onCancelProcessing={handleCancelProcessing}
-        />
+        <CollapsibleSection
+          id="sec-4"
+          sectionNumber="4"
+          title="Batch Processing Engine (एकत्रित प्रक्रिया नियंत्रण)"
+          subtitle="सर्व फाईल्सची बॅच प्रक्रिया व स्वतंत्र फाईल्समध्ये विभाजन"
+          isCollapsed={!!collapsedSections.section4}
+          onToggle={() => toggleSection('section4')}
+          icon={<Sparkles className="w-4 h-4 text-emerald-600" />}
+        >
+          <BatchProcessor
+            files={files}
+            isProcessing={isProcessing}
+            isPaused={isPaused}
+            currentProcessingIndex={currentProcessingIndex}
+            onStartProcessing={handleStartProcessing}
+            onPauseProcessing={handlePauseProcessing}
+            onResumeProcessing={handleResumeProcessing}
+            onCancelProcessing={handleCancelProcessing}
+          />
+        </CollapsibleSection>
 
         {/* 5. Interactive Data Preview & In-App Correction */}
-        <DataPreview
-          activeFile={activeFile}
-          columnRules={currentActiveRules}
-          bankMappings={bankMappings}
-          onOpenChangesModal={() => setIsChangesModalOpen(true)}
-          onOpenFindReplace={() => setIsFindReplaceOpen(true)}
-          onAutoCorrectBankAndIfsc={handleAutoCorrectBankAndIfsc}
-          onOpenBankMasterManager={() => setIsBankManagerOpen(true)}
-          onOpenCorrectionModal={(detail) => setSelectedCellToCorrect(detail)}
-        />
+        <CollapsibleSection
+          id="sec-5"
+          sectionNumber="5"
+          title="Interactive Data Preview & Edit (डेटा प्रिव्ह्यू व थेट दुरुस्ती)"
+          subtitle="अवैध सेल्स हायलाईट, बँक व IFSC ऑटो-करेक्ट, शोध व बदल"
+          badge={activeFile ? activeFile.name : undefined}
+          badgeColor="emerald"
+          isCollapsed={!!collapsedSections.section5}
+          onToggle={() => toggleSection('section5')}
+          icon={<TableIcon className="w-4 h-4 text-blue-600" />}
+        >
+          <DataPreview
+            activeFile={activeFile}
+            columnRules={currentActiveRules}
+            bankMappings={bankMappings}
+            onOpenChangesModal={() => setIsChangesModalOpen(true)}
+            onOpenFindReplace={() => setIsFindReplaceOpen(true)}
+            onAutoCorrectBankAndIfsc={handleAutoCorrectBankAndIfsc}
+            onOpenBankMasterManager={() => setIsBankManagerOpen(true)}
+            onOpenCorrectionModal={(detail) => setSelectedCellToCorrect(detail)}
+          />
+        </CollapsibleSection>
 
-        {/* 6. Data Quality & Duplicate Governance */}
-        <DataQuality
-          activeFile={activeFile}
-          settings={settings}
-          onUpdateSettings={handleUpdateSettings}
-          onTriggerReClean={handleTriggerReCleanActive}
-        />
+        {/* 6. Data Quality & Duplicate Governance (Default Minimised) */}
+        <CollapsibleSection
+          id="sec-6"
+          sectionNumber="6"
+          title="Data Quality & Duplicate Governance (डेटा गुणवत्ता व डुप्लिकेट तपासणी)"
+          subtitle="अवैध मोबाईल, आधार, IFSC, रिक्त घटकांची सांख्यिकी व डुप्लिकेट नियम"
+          isCollapsed={!!collapsedSections.section6}
+          onToggle={() => toggleSection('section6')}
+          icon={<ShieldAlert className="w-4 h-4 text-amber-600" />}
+          summaryWhenCollapsed={
+            activeFile?.qualityReport ? (
+              <span className="text-amber-700 dark:text-amber-300 font-medium">
+                एकूण ओळी: {activeFile.qualityReport.totalRows.toLocaleString()} • रिक्त सेल्स: {activeFile.qualityReport.blankCells.toLocaleString()}
+              </span>
+            ) : undefined
+          }
+        >
+          <DataQuality
+            activeFile={activeFile}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onTriggerReClean={handleTriggerReCleanActive}
+          />
+        </CollapsibleSection>
 
-        {/* 7. Processing Audit Log */}
-        <ProcessingLog activeFile={activeFile} />
+        {/* 7. Processing Audit Log (Default Minimised) */}
+        <CollapsibleSection
+          id="sec-7"
+          sectionNumber="7"
+          title="Processing Audit Log (प्रक्रिया ऑडिट लॉग)"
+          subtitle="स्तंभ आणि नियमांनुसार झालेल्या बदलांचा संपूर्ण लेखाजोखा"
+          isCollapsed={!!collapsedSections.section7}
+          onToggle={() => toggleSection('section7')}
+          icon={<FileText className="w-4 h-4 text-slate-600" />}
+          summaryWhenCollapsed={
+            activeFile?.processingLogs ? (
+              <span className="text-slate-600 dark:text-slate-400 font-medium">
+                {activeFile.processingLogs.length} प्रक्रिया लॉग नोंदी उपलब्ध.
+              </span>
+            ) : undefined
+          }
+        >
+          <ProcessingLog activeFile={activeFile} />
+        </CollapsibleSection>
 
         {/* 8. Output & Export Actions (Correct / Incorrect files, No ZIP) */}
-        <OutputActions
-          files={files}
-          activeFile={activeFile}
-          onDownloadCorrect={handleDownloadCorrect}
-          onDownloadIncorrect={handleDownloadIncorrect}
-          onDownloadBoth={handleDownloadBoth}
-          onDownloadAllCompleted={handleDownloadAllCompleted}
-          outputDirectoryName={outputDirectoryName}
-          onSelectOutputFolder={handleSelectOutputFolder}
-          onClearOutputFolder={handleClearOutputFolder}
-          exportFormat={exportFormat}
-          onToggleExportFormat={setExportFormat}
-        />
+        <CollapsibleSection
+          id="sec-8"
+          sectionNumber="8"
+          title="Output & Export Actions (स्वतंत्र फाईल्स डाऊनलोड - No ZIP)"
+          subtitle="_correct आणि _incorrect फाईल्स थेट डाऊनलोड किंवा फोल्डरमध्ये सेव्ह करा"
+          badge={exportFormat.toUpperCase()}
+          badgeColor="blue"
+          isCollapsed={!!collapsedSections.section8}
+          onToggle={() => toggleSection('section8')}
+          icon={<Download className="w-4 h-4 text-emerald-600" />}
+        >
+          <OutputActions
+            files={files}
+            activeFile={activeFile}
+            onDownloadCorrect={handleDownloadCorrect}
+            onDownloadIncorrect={handleDownloadIncorrect}
+            onDownloadBoth={handleDownloadBoth}
+            onDownloadAllCompleted={handleDownloadAllCompleted}
+            outputDirectoryName={outputDirectoryName}
+            onSelectOutputFolder={handleSelectOutputFolder}
+            onClearOutputFolder={handleClearOutputFolder}
+            exportFormat={exportFormat}
+            onToggleExportFormat={setExportFormat}
+          />
+        </CollapsibleSection>
       </main>
 
       {/* In-App Data Correction Modal */}

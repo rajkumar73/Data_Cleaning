@@ -823,3 +823,114 @@ export function autoCorrectBankAndIfscInDataset(
     },
   };
 }
+
+/**
+ * Automatically inspects uploaded dataset rows for valid, correct bank & IFSC entries,
+ * and adds any new verified bank branches to the application master directory.
+ * Requirement: "अपलोड करण्यात येत असलेल्या file मधुन बँकेचा correct data application मध्ये ॲड करा (automatic)"
+ */
+export function extractAndLearnBankMasterFromRows(
+  headers: string[],
+  rows: any[][],
+  currentMasterList: BankMasterEntry[]
+): {
+  newEntriesAdded: BankMasterEntry[];
+  updatedMasterList: BankMasterEntry[];
+  summaryMessage: string;
+} {
+  // Find column indices
+  let bankColIdx = -1;
+  let branchColIdx = -1;
+  let ifscColIdx = -1;
+  let districtColIdx = -1;
+
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i].toLowerCase().trim();
+    if (ifscColIdx === -1 && /ifsc|आयएफएससी|ifsc_code/i.test(h)) {
+      ifscColIdx = i;
+    } else if (branchColIdx === -1 && /branch|शाखा/i.test(h)) {
+      branchColIdx = i;
+    } else if (bankColIdx === -1 && /bank|बँक|bank_name/i.test(h)) {
+      bankColIdx = i;
+    } else if (districtColIdx === -1 && /district|जिल्हा|village|गाव/i.test(h)) {
+      districtColIdx = i;
+    }
+  }
+
+  // Need at least IFSC to learn authentic data
+  if (ifscColIdx === -1) {
+    return {
+      newEntriesAdded: [],
+      updatedMasterList: currentMasterList,
+      summaryMessage: '',
+    };
+  }
+
+  const existingIfscSet = new Set(
+    currentMasterList.map((e) => e.ifscCode.toUpperCase().trim())
+  );
+  const newEntriesAdded: BankMasterEntry[] = [];
+  const updatedMasterList = [...currentMasterList];
+
+  for (const row of rows) {
+    if (!row) continue;
+    const rawIfsc = row[ifscColIdx];
+    const rawBank = bankColIdx !== -1 ? row[bankColIdx] : '';
+    const rawBranch = branchColIdx !== -1 ? row[branchColIdx] : '';
+    const rawDistrict = districtColIdx !== -1 ? row[districtColIdx] : '';
+
+    if (!rawIfsc) continue;
+
+    // Check IFSC validity: fix typos if 5th char is 'O'
+    const fixed = fixIfscTypos(rawIfsc).fixed;
+    // Standard Indian IFSC regex: 4 letters, 0, 6 alphanumeric
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(fixed)) continue;
+
+    const cleanBank = String(rawBank || '').trim().toUpperCase() || getBankNameFromIfscPrefix(fixed);
+    const cleanBranch = String(rawBranch || '').trim().toUpperCase() || 'MAIN';
+    const cleanDistrict = String(rawDistrict || '').trim();
+
+    if (!cleanBank || cleanBank === 'UNKNOWN BANK') continue;
+
+    // Check if IFSC already in master
+    if (!existingIfscSet.has(fixed)) {
+      const newEntry: BankMasterEntry = {
+        id: `auto-${Date.now().toString(36)}-${fixed}`,
+        bankName: cleanBank,
+        branchName: cleanBranch,
+        ifscCode: fixed,
+        district: cleanDistrict || undefined,
+        aliases: cleanBank ? [cleanBank] : undefined,
+      };
+      existingIfscSet.add(fixed);
+      newEntriesAdded.push(newEntry);
+      updatedMasterList.unshift(newEntry);
+    } else {
+      // If existing had empty branch but this row has valid branch, enrich it
+      const existingIdx = updatedMasterList.findIndex(
+        (e) => e.ifscCode.toUpperCase().trim() === fixed
+      );
+      if (existingIdx !== -1) {
+        const item = updatedMasterList[existingIdx];
+        if ((!item.branchName || item.branchName === 'MAIN') && cleanBranch && cleanBranch !== 'MAIN') {
+          updatedMasterList[existingIdx] = {
+            ...item,
+            branchName: cleanBranch,
+            district: item.district || cleanDistrict || undefined,
+          };
+        }
+      }
+    }
+  }
+
+  let summaryMessage = '';
+  if (newEntriesAdded.length > 0) {
+    summaryMessage = `🎉 अपलोड केलेल्या फाईलमधून बँकेचा अचूक डेटा (${newEntriesAdded.length} नवीन शाखा व IFSC) ॲप्लीकेशन मास्टर डिरेक्टरीमध्ये आपोआप जोडला गेला!`;
+  }
+
+  return {
+    newEntriesAdded,
+    updatedMasterList,
+    summaryMessage,
+  };
+}

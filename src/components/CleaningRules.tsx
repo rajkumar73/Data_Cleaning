@@ -141,12 +141,12 @@ export const CleaningRules: React.FC<CleaningRulesProps> = ({
             <h2 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">
               3. Cleaning & Validation Rules
             </h2>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
-              {headers.length} Columns
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-cyan-100 dark:bg-cyan-900/50 text-cyan-800 dark:text-cyan-300 font-mono">
+              {headers.length} Columns (कमी किंवा जास्त रकाने समर्थित)
             </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Configure column cleaning transformations, bank standardizations, and Indian data validations.
+            फाईलमध्ये कितीही रकाने असले तरी हेडर व आतील डेटा नमुन्यावरून १००% स्थानिक पद्धतीने (No API Key) स्मार्ट नियम आपोआप ओळखले जातात.
           </p>
         </div>
 

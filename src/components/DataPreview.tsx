@@ -3,6 +3,8 @@ import {
   Table as TableIcon,
   Search,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   AlertTriangle,
   History,
   ChevronLeft,
@@ -12,6 +14,8 @@ import {
   Sparkles,
   Replace,
   Building2,
+  RotateCcw,
+  X,
 } from 'lucide-react';
 import {
   BankMapping,
@@ -21,6 +25,52 @@ import {
 } from '../types/dataCleaner';
 import { cleanCellValue } from '../utils/cleaningEngine';
 import { computeDatasetTotals, findSrNoColIndex } from '../utils/excelExporter';
+
+/**
+ * Intelligent sort key extractor that preserves data type semantics:
+ * - Dates (DD/MM/YYYY) are sorted chronologically
+ * - Numbers & Currency amounts (e.g. ₹ 18,000.00) are sorted numerically
+ * - Text is sorted with natural language alphanumeric collation
+ * - Blank/null cells are cleanly sent to the bottom
+ */
+function extractSortKey(val: any): {
+  type: 'blank' | 'number' | 'date' | 'string';
+  numVal?: number;
+  strVal: string;
+} {
+  if (val === null || val === undefined || String(val).trim() === '') {
+    return { type: 'blank', strVal: '' };
+  }
+  const str = String(val).trim();
+
+  // 1. Check Date DD/MM/YYYY or DD-MM-YYYY
+  const dateMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+  if (dateMatch) {
+    const d = parseInt(dateMatch[1], 10);
+    const m = parseInt(dateMatch[2], 10) - 1;
+    const y = parseInt(dateMatch[3], 10);
+    if (d >= 1 && d <= 31 && m >= 0 && m <= 11 && y >= 1900 && y <= 2100) {
+      const time = new Date(y, m, d).getTime();
+      if (!isNaN(time)) {
+        return { type: 'date', numVal: time, strVal: str };
+      }
+    }
+  }
+
+  // 2. Check Numeric or Currency Amount (strip currency symbols, commas, spaces)
+  const cleanNumStr = str
+    .replace(/[₹\$\,\s]/g, '')
+    .replace(/\b(?:rs|inr)\.?\b/gi, '')
+    .trim();
+  if (/^-?\d+(\.\d+)?$/.test(cleanNumStr)) {
+    const n = parseFloat(cleanNumStr);
+    if (!isNaN(n)) {
+      return { type: 'number', numVal: n, strVal: str };
+    }
+  }
+
+  return { type: 'string', strVal: str.toLowerCase() };
+}
 
 interface DataPreviewProps {
   activeFile: FileItem | null;
@@ -135,14 +185,28 @@ export const DataPreview: React.FC<DataPreviewProps> = ({
 
     if (sortColIndex !== null) {
       result.sort((a, b) => {
-        const valA = a.row[sortColIndex] ?? '';
-        const valB = b.row[sortColIndex] ?? '';
-        if (typeof valA === 'number' && typeof valB === 'number') {
-          return sortDirection === 'asc' ? valA - valB : valB - valA;
+        const keyA = extractSortKey(a.row[sortColIndex]);
+        const keyB = extractSortKey(b.row[sortColIndex]);
+
+        // Blank/null cells always placed at the bottom regardless of sort direction
+        if (keyA.type === 'blank' && keyB.type === 'blank') return 0;
+        if (keyA.type === 'blank') return 1;
+        if (keyB.type === 'blank') return -1;
+
+        let cmp = 0;
+        if (
+          (keyA.type === 'number' || keyA.type === 'date') &&
+          (keyB.type === 'number' || keyB.type === 'date')
+        ) {
+          cmp = (keyA.numVal ?? 0) - (keyB.numVal ?? 0);
+        } else {
+          cmp = keyA.strVal.localeCompare(keyB.strVal, undefined, {
+            numeric: true,
+            sensitivity: 'base',
+          });
         }
-        return sortDirection === 'asc'
-          ? String(valA).localeCompare(String(valB))
-          : String(valB).localeCompare(String(valA));
+
+        return sortDirection === 'asc' ? cmp : -cmp;
       });
     }
 
@@ -183,6 +247,7 @@ export const DataPreview: React.FC<DataPreviewProps> = ({
   }
 
   const handleSort = (colIdx: number) => {
+    setCurrentPage(1);
     if (sortColIndex === colIdx) {
       if (sortDirection === 'asc') {
         setSortDirection('desc');
@@ -387,8 +452,8 @@ export const DataPreview: React.FC<DataPreviewProps> = ({
 
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2 flex-1 max-w-sm">
-          <div className="relative w-full">
+        <div className="flex flex-wrap items-center gap-2 flex-1 max-w-lg">
+          <div className="relative w-full max-w-sm">
             <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
             <input
               type="text"
@@ -401,6 +466,33 @@ export const DataPreview: React.FC<DataPreviewProps> = ({
               className="w-full bg-white border border-slate-300 rounded-xl pl-9 pr-3 py-1.5 text-slate-900 text-xs placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
             />
           </div>
+
+          {/* Active Sort Pill Indicator */}
+          {sortColIndex !== null && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-xs font-semibold shadow-xs animate-in fade-in">
+              <span className="flex items-center gap-1">
+                {sortDirection === 'asc' ? (
+                  <ArrowUp className="w-3.5 h-3.5 text-blue-600" />
+                ) : (
+                  <ArrowDown className="w-3.5 h-3.5 text-blue-600" />
+                )}
+                <span>
+                  क्रमवारी: <strong>{headers[sortColIndex]}</strong> ({sortDirection === 'asc' ? 'चढता ↑' : 'उतरता ↓'})
+                </span>
+              </span>
+              <button
+                onClick={() => {
+                  setSortColIndex(null);
+                  setSortDirection('asc');
+                  setCurrentPage(1);
+                }}
+                className="ml-1 p-0.5 rounded-full hover:bg-blue-200 text-blue-700 transition"
+                title="क्रमवारी रद्द करा (मूळ क्रमाने दाखवा)"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
         </div>
 
         <span className="text-slate-600 font-mono text-[11px] font-semibold">
@@ -420,18 +512,48 @@ export const DataPreview: React.FC<DataPreviewProps> = ({
               <th className="py-2.5 px-2 w-16 text-center text-slate-700 bg-slate-100 border-r border-slate-200">
                 कृती
               </th>
-              {headers.map((col, idx) => (
-                <th
-                  key={idx}
-                  onClick={() => handleSort(idx)}
-                  className="py-2.5 px-3 cursor-pointer hover:bg-slate-200/80 select-none whitespace-nowrap transition-colors border-r border-slate-200"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span>{col}</span>
-                    <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                  </div>
-                </th>
-              ))}
+              {headers.map((col, idx) => {
+                const isSorted = sortColIndex === idx;
+                return (
+                  <th
+                    key={idx}
+                    onClick={() => handleSort(idx)}
+                    className={`py-2.5 px-3 cursor-pointer select-none whitespace-nowrap transition-colors border-r border-slate-200 group ${
+                      isSorted
+                        ? 'bg-blue-100/90 text-blue-950 border-b-2 border-b-blue-600 shadow-xs'
+                        : 'hover:bg-slate-200/80 text-slate-800'
+                    }`}
+                    title={
+                      isSorted
+                        ? sortDirection === 'asc'
+                          ? `${col}: चढत्या क्रमाने लावले आहे (Ascending). उतरत्या क्रमाने लावण्यासाठी क्लिक करा.`
+                          : `${col}: उतरत्या क्रमाने लावले आहे (Descending). क्रमवारी काढण्यासाठी क्लिक करा.`
+                        : `${col}: या स्तंभानुसार क्रमवारी लावण्यासाठी क्लिक करा (Click to sort)`
+                    }
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold">{col}</span>
+                      <div className="shrink-0 flex items-center">
+                        {isSorted ? (
+                          sortDirection === 'asc' ? (
+                            <span className="inline-flex items-center gap-0.5 text-blue-700 bg-blue-200/80 px-1 py-0.5 rounded text-[10px] font-bold">
+                              <ArrowUp className="w-3 h-3" />
+                              <span>ASC</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 text-blue-700 bg-blue-200/80 px-1 py-0.5 rounded text-[10px] font-bold">
+                              <ArrowDown className="w-3 h-3" />
+                              <span>DESC</span>
+                            </span>
+                          )
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-slate-400 group-hover:text-slate-700 transition" />
+                        )}
+                      </div>
+                    </div>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 font-sans">
