@@ -144,7 +144,7 @@ const COLUMN_PATTERNS: ColumnPattern[] = [
       'bank_name', 'bank', 'bank name', 'farmer bank', 'dbt bank', 'financial institution',
       'बँक', 'बँकेचे नाव', 'बँक नाव'
     ],
-    rules: ['Trim', 'Bank Standardize'],
+    rules: ['Trim', 'Text'],
   },
   {
     canonicalName: 'Branch_Name',
@@ -224,7 +224,7 @@ export function detectRulesFromHeaderOnly(columnName: string): CleaningRule[] | 
     return ['Trim', 'Proper'];
   }
   if (/bank|बँक/i.test(normalized) && !/account|खाते|a\/c|acc/i.test(normalized)) {
-    return ['Trim', 'Bank Standardize'];
+    return ['Trim', 'Text'];
   }
   if (/account|खाते|acc|a\/c/i.test(normalized)) {
     return ['Trim', 'Text'];
@@ -331,7 +331,7 @@ export function detectRulesFromDataValues(sampleValues: any[]): CleaningRule[] |
     return ['Trim', 'UPPER', 'Text', 'IFSC(11)'];
   }
   if (bankKeywordCount / total >= 0.4) {
-    return ['Trim', 'Bank Standardize'];
+    return ['Trim', 'Text'];
   }
   if (dateCount / total >= 0.4) {
     return ['Date(dd/mm/yyyy)'];

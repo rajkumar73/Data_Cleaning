@@ -11,6 +11,10 @@ import {
   Building,
   CheckCircle,
   FileMinus,
+  Users,
+  Calculator,
+  Scale,
+  AlertTriangle,
 } from 'lucide-react';
 import { AppSettings, FileItem } from '../types/dataCleaner';
 
@@ -127,6 +131,88 @@ export const DataQuality: React.FC<DataQualityProps> = ({
         </div>
       </div>
 
+      {/* Requirement 'ब': हेक्टरनिहाय अनुदानाचा ताळमेळ (Rate vs Area Cross-Verification) */}
+      <div className="bg-blue-50/70 dark:bg-slate-950/70 border border-blue-200 dark:border-blue-900/50 rounded-xl p-3.5 space-y-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Calculator className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span className="font-bold text-slate-900 dark:text-white">
+              हेक्टरनिहाय अनुदान ताळमेळ तपासणी (Rate vs Area Cross-Verification):
+            </span>
+            <span className="text-[11px] text-blue-800 dark:text-blue-300 font-medium">
+              (क्षेत्र × शासन दर = अपेक्षित रक्कम तपासा)
+            </span>
+          </div>
+
+          <label className="flex items-center gap-2 font-bold cursor-pointer text-blue-900 dark:text-blue-300">
+            <input
+              type="checkbox"
+              checked={!!settings.rateVerificationEnabled}
+              onChange={(e) => {
+                onUpdateSettings({ rateVerificationEnabled: e.target.checked });
+                if (onTriggerReClean) setTimeout(onTriggerReClean, 50);
+              }}
+              className="rounded bg-white dark:bg-slate-800 border-blue-300 text-blue-600 focus:ring-0"
+            />
+            <span>ताळमेळ नियम सक्रिय करा</span>
+          </label>
+        </div>
+
+        {settings.rateVerificationEnabled && (
+          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-blue-200/80">
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-600 font-medium">शासन अनुदान दर:</span>
+              <select
+                value={settings.reliefRatePerHectare || 13600}
+                onChange={(e) => {
+                  onUpdateSettings({ reliefRatePerHectare: Number(e.target.value) });
+                  if (onTriggerReClean) setTimeout(onTriggerReClean, 50);
+                }}
+                className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 font-bold text-slate-800"
+              >
+                <option value={13600}>₹ १३,६०० / हेक्टर (जिरायत पिके - SDRF सुधारित)</option>
+                <option value={8500}>₹ ८,५०० / हेक्टर (जिरायत पिके - NDRF)</option>
+                <option value={17000}>₹ १७,००० / हेक्टर (बागायत पिके)</option>
+                <option value={22500}>₹ २२,५०० / हेक्टर (बहुवार्षिक / फळपिके)</option>
+                <option value={27000}>₹ २७,००० / हेक्टर (फळबागा सुधारित)</option>
+                <option value={36000}>₹ ३६,००० / हेक्टर (विशेष पॅकेज)</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-600 font-medium">कमाल क्षेत्र मर्यादा:</span>
+              <select
+                value={settings.maxHectaresCeiling !== undefined ? settings.maxHectaresCeiling : 2}
+                onChange={(e) => {
+                  onUpdateSettings({ maxHectaresCeiling: Number(e.target.value) });
+                  if (onTriggerReClean) setTimeout(onTriggerReClean, 50);
+                }}
+                className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 font-bold text-slate-800"
+              >
+                <option value={2}>२.०० हेक्टर मर्यादा (Max 2 Ha)</option>
+                <option value={3}>३.०० हेक्टर मर्यादा (Max 3 Ha)</option>
+                <option value={0}>मर्यादा नाही (Full Area)</option>
+              </select>
+            </div>
+
+            {onTriggerReClean && (
+              <button
+                onClick={onTriggerReClean}
+                className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold transition shadow-xs"
+              >
+                ताळमेळ पुन्हा तपासा
+              </button>
+            )}
+
+            {qr && qr.rateMismatchCount !== undefined && qr.rateMismatchCount > 0 && (
+              <span className="text-rose-700 font-bold bg-rose-100 px-2 py-0.5 rounded-md">
+                ⚠️ {qr.rateMismatchCount} खात्यांमध्ये अनुदान रकमेत तफावत आढळली!
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Metrics Summary Grid */}
       {qr ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
@@ -139,6 +225,41 @@ export const DataQuality: React.FC<DataQualityProps> = ({
               {qr.totalRows.toLocaleString()}
             </div>
           </div>
+
+          {/* Requirement 'अ': Duplicate Aadhaar */}
+          <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-slate-950 border border-amber-200 dark:border-slate-800">
+            <div className="flex items-center justify-between text-slate-700 dark:text-slate-400 text-xs font-semibold">
+              <span>दुबार आधार (Dup Aadhaar)</span>
+              <Users className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono text-amber-800 dark:text-amber-400">
+              {qr.duplicateAadhaarCount ? qr.duplicateAadhaarCount.toLocaleString() : '0'}
+            </div>
+          </div>
+
+          {/* Requirement 'अ': Duplicate Bank Accounts */}
+          <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-slate-950 border border-amber-200 dark:border-slate-800">
+            <div className="flex items-center justify-between text-slate-700 dark:text-slate-400 text-xs font-semibold">
+              <span>दुबार बँक खाती (Dup A/c)</span>
+              <CreditCard className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+            </div>
+            <div className="mt-1 text-lg font-bold font-mono text-amber-800 dark:text-amber-400">
+              {qr.duplicateAccountCount ? qr.duplicateAccountCount.toLocaleString() : '0'}
+            </div>
+          </div>
+
+          {/* Requirement 'ब': Rate Mismatch */}
+          {settings.rateVerificationEnabled && (
+            <div className="p-3 rounded-xl bg-rose-50/70 dark:bg-slate-950 border border-rose-200 dark:border-slate-800">
+              <div className="flex items-center justify-between text-slate-700 dark:text-slate-400 text-xs font-semibold">
+                <span>अनुदान तफावत (Rate Diff)</span>
+                <Scale className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div className="mt-1 text-lg font-bold font-mono text-rose-800 dark:text-rose-400">
+                {qr.rateMismatchCount ? qr.rateMismatchCount.toLocaleString() : '0'}
+              </div>
+            </div>
+          )}
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between text-slate-600 dark:text-slate-400 text-xs font-semibold">

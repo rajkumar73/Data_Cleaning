@@ -71,6 +71,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   conflictHandling: 'create_new',
   includeQualitySheet: true,
   includeLogSheet: true,
+  rateVerificationEnabled: false,
+  reliefRatePerHectare: 13600,
+  maxHectaresCeiling: 2,
 };
 
 export const DEFAULT_PROFILES: CleaningProfile[] = [

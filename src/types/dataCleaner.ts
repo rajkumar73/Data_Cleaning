@@ -60,6 +60,10 @@ export interface DataQualityReport {
   invalidAmounts: number;
   banksStandardized: number;
   changedCellsCount: number;
+  duplicateAadhaarCount?: number;
+  duplicateAccountCount?: number;
+  duplicateRowIndices?: number[];
+  rateMismatchCount?: number;
   columnBlankStats: ColumnBlankStat[];
 }
 
@@ -117,6 +121,21 @@ export interface AppSettings {
   conflictHandling: 'create_new' | 'overwrite' | 'skip';
   includeQualitySheet: boolean;
   includeLogSheet: boolean;
+  // Rate vs Area Verification Settings (Requirement 'ब')
+  rateVerificationEnabled?: boolean;
+  reliefRatePerHectare?: number;
+  maxHectaresCeiling?: number;
+}
+
+export interface VillageSplitSummary {
+  villageName: string;
+  rowCount: number;
+  correctCount: number;
+  incorrectCount: number;
+  totalArea: number;
+  totalAmount: number;
+  blob?: Blob;
+  filename: string;
 }
 
 export type BankMapping = {

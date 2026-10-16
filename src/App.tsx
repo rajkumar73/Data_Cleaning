@@ -91,9 +91,6 @@ export default function App() {
   const [profiles, setProfiles] = useState<CleaningProfile[]>(loadProfiles);
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx');
 
-  // Automatic Bank Data Extraction Notification
-  const [bankAutoLearnNotification, setBankAutoLearnNotification] = useState<string | null>(null);
-
   // Collapsible Sections Management
   // Requirement: "यातील प्रत्येक section minimise करण्याची सुविधा दया म्हणजे आवश्यक तेवढाच भाग दिसेल कारण ३,6, 7 हे वारंवार लागणार नाहीत किंवा त्यांची जास्त आवश्यकता नाही"
   const [collapsedSections, setCollapsedSections] = useState<{ [key: string]: boolean }>(() => {
@@ -212,15 +209,6 @@ export default function App() {
           }
         );
 
-        // Automatically extract authentic bank data & IFSC from uploaded file
-        // Requirement: "अपलोड करण्यात येत असलेल्या file मधुन बँकेचा correct data application मध्ये ॲड करा (automatic)"
-        const extraction = extractAndLearnBankMasterFromRows(item.headers, item.originalData, bankMasterList);
-        if (extraction.newEntriesAdded.length > 0) {
-          setBankMasterList(extraction.updatedMasterList);
-          saveBankMasterDirectory(extraction.updatedMasterList);
-          setBankAutoLearnNotification(extraction.summaryMessage);
-        }
-
         newFileItems.push({
           ...item,
           cleanedData: result.cleanedRows,
@@ -279,14 +267,6 @@ export default function App() {
   const handleLoadSample = () => {
     const sample = createSampleFarmerFile();
     const detected = autoDetectAllColumns(sample.headers, sample.originalData);
-
-    // Automatically extract authentic bank data & IFSC from sample file too
-    const extraction = extractAndLearnBankMasterFromRows(sample.headers, sample.originalData, bankMasterList);
-    if (extraction.newEntriesAdded.length > 0) {
-      setBankMasterList(extraction.updatedMasterList);
-      saveBankMasterDirectory(extraction.updatedMasterList);
-      setBankAutoLearnNotification(extraction.summaryMessage);
-    }
 
     const result = processDataset(
       sample.headers,
@@ -586,7 +566,9 @@ export default function App() {
       await new Promise((r) => setTimeout(r, 100));
 
       try {
-        const rules = fileColumnRules[currentFile.id] || autoDetectAllColumns(currentFile.headers);
+        const rules =
+          fileColumnRules[currentFile.id] ||
+          autoDetectAllColumns(currentFile.headers, currentFile.originalData);
         const updatedFile = await processSingleFile(currentFile, rules);
 
         setFiles((prev) =>
@@ -957,6 +939,12 @@ export default function App() {
   const handleAutoCorrectBankAndIfsc = () => {
     if (!activeFile) return;
 
+    // Requirement: "बँकेचा डाटा सांगितल्याशिवाय auto correct करु नका"
+    const confirmMessage = `तुम्हाला "${activeFile.name}" मधील बँकेचे नाव, शाखा आणि IFSC कोड मास्टर डिरेक्टरीनुसार स्वयंचलित दुरुस्त (Auto-Correct) करायचे आहेत का?\n\n(सूचना: तुमच्या स्पष्ट सूचनेनुसारच हा बदल केला जाईल.)`;
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
     const currentRows =
       activeFile.cleanedData && activeFile.cleanedData.length > 0
         ? activeFile.cleanedData
@@ -1185,23 +1173,6 @@ export default function App() {
 
       {/* Main Workspace Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Automatic Bank Data Learning Notification Banner */}
-        {bankAutoLearnNotification && (
-          <div className="p-3 sm:p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 rounded-2xl flex items-center justify-between text-xs font-semibold shadow-xs animate-in fade-in slide-in-from-top-2">
-            <div className="flex items-center gap-2.5">
-              <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>{bankAutoLearnNotification}</span>
-            </div>
-            <button
-              onClick={() => setBankAutoLearnNotification(null)}
-              className="p-1 rounded-lg text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 font-bold"
-              title="बंद करा"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         {/* Top Metric Dashboard Cards */}
         <DashboardStatsCards files={files} activeFile={activeFile} />
 

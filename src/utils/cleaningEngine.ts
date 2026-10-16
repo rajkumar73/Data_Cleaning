@@ -419,6 +419,12 @@ export function processDataset(
     removeDuplicates: boolean;
     removeBlankRows: boolean;
     removeBlankCols: boolean;
+    rateVerification?: {
+      enabled: boolean;
+      ratePerHectare: number;
+      maxHectaresCeiling?: number;
+      tolerance?: number;
+    };
   }
 ): {
   cleanedHeaders: string[];
@@ -610,6 +616,132 @@ export function processDataset(
     validationGrid.push(valRow);
   }
 
+  // =========================================================================
+  // Requirement 'अ': दुबार लाभार्थी व खाती तपासणी (Duplicate Aadhaar & Bank A/c)
+  // =========================================================================
+  const aadhaarColIdx = activeHeaders.findIndex((h) => {
+    const rules = columnRules[h] || [];
+    return rules.includes('Aadhaar(12)') || /aadhaar|aadhar|आधार/i.test(h);
+  });
+
+  const accountColIdx = activeHeaders.findIndex((h) => {
+    return /account|खाते|a\/c|acc_no/i.test(h);
+  });
+
+  const aadhaarMap = new Map<string, number[]>();
+  const accountMap = new Map<string, number[]>();
+  const duplicateRowIndexSet = new Set<number>();
+  let duplicateAadhaarCount = 0;
+  let duplicateAccountCount = 0;
+
+  for (let r = 0; r < cleanedRows.length; r++) {
+    // Aadhaar Check
+    if (aadhaarColIdx !== -1) {
+      const rawA = String(cleanedRows[r][aadhaarColIdx] || '').replace(/\D/g, '');
+      if (rawA.length === 12) {
+        const list = aadhaarMap.get(rawA) || [];
+        list.push(r);
+        aadhaarMap.set(rawA, list);
+      }
+    }
+    // Account Check
+    if (accountColIdx !== -1) {
+      const rawAcc = String(cleanedRows[r][accountColIdx] || '').trim().replace(/[\s\-]/g, '');
+      if (rawAcc.length >= 6) {
+        const list = accountMap.get(rawAcc) || [];
+        list.push(r);
+        accountMap.set(rawAcc, list);
+      }
+    }
+  }
+
+  // Flag duplicate Aadhaar rows
+  for (const [, rowIndices] of aadhaarMap.entries()) {
+    if (rowIndices.length > 1) {
+      duplicateAadhaarCount += rowIndices.length;
+      rowIndices.forEach((rIdx) => {
+        duplicateRowIndexSet.add(rIdx);
+        const otherRows = rowIndices
+          .filter((idx) => idx !== rIdx)
+          .map((idx) => `#${idx + 1}`)
+          .join(', ');
+        const currentCell = validationGrid[rIdx][aadhaarColIdx];
+        validationGrid[rIdx][aadhaarColIdx] = {
+          isValid: false,
+          reason: `⚠️ दुबार आधार क्रमांक: ही नोंद फाईलमध्ये ${rowIndices.length} वेळा आढळली (ओळी: ${otherRows})`,
+          originalValue: currentCell?.originalValue ?? cleanedRows[rIdx][aadhaarColIdx],
+          cleanedValue: cleanedRows[rIdx][aadhaarColIdx],
+          isModified: currentCell?.isModified ?? false,
+        };
+      });
+    }
+  }
+
+  // Flag duplicate Bank Account rows
+  for (const [, rowIndices] of accountMap.entries()) {
+    if (rowIndices.length > 1) {
+      duplicateAccountCount += rowIndices.length;
+      rowIndices.forEach((rIdx) => {
+        duplicateRowIndexSet.add(rIdx);
+        const otherRows = rowIndices
+          .filter((idx) => idx !== rIdx)
+          .map((idx) => `#${idx + 1}`)
+          .join(', ');
+        const currentCell = validationGrid[rIdx][accountColIdx];
+        validationGrid[rIdx][accountColIdx] = {
+          isValid: false,
+          reason: `⚠️ दुबार बँक खाते: हे खाते ${rowIndices.length} वेगवेगळ्या नोंदींमध्ये वापरले आहे (ओळी: ${otherRows})`,
+          originalValue: currentCell?.originalValue ?? cleanedRows[rIdx][accountColIdx],
+          cleanedValue: cleanedRows[rIdx][accountColIdx],
+          isModified: currentCell?.isModified ?? false,
+        };
+      });
+    }
+  }
+
+  // =========================================================================
+  // Requirement 'ब': हेक्टरनिहाय अनुदानाचा ताळमेळ (Rate vs Area Cross-Verification)
+  // =========================================================================
+  const areaColIdx = activeHeaders.findIndex((h) => {
+    const rules = columnRules[h] || [];
+    return rules.includes('Number') || /area|क्षेत्र|हेक्टर|hectare|बाधित/i.test(h);
+  });
+
+  const amountColIdx = activeHeaders.findIndex((h) => {
+    const rules = columnRules[h] || [];
+    return rules.includes('Amount') || /amount|रक्कम|अनुदान|मंजूर/i.test(h);
+  });
+
+  let rateMismatchCount = 0;
+  if (options.rateVerification?.enabled && areaColIdx !== -1 && amountColIdx !== -1) {
+    const rate = options.rateVerification.ratePerHectare || 13600;
+    const ceiling = options.rateVerification.maxHectaresCeiling || 0;
+    const tolerance = options.rateVerification.tolerance ?? 10;
+
+    for (let r = 0; r < cleanedRows.length; r++) {
+      const areaVal = parseFloat(String(cleanedRows[r][areaColIdx] || '0').replace(/,/g, ''));
+      const actualAmount = parseFloat(String(cleanedRows[r][amountColIdx] || '0').replace(/[₹\$\,\s]/g, ''));
+
+      if (!isNaN(areaVal) && areaVal > 0 && !isNaN(actualAmount) && actualAmount > 0) {
+        const eligibleArea = ceiling > 0 ? Math.min(areaVal, ceiling) : areaVal;
+        const expectedAmount = Math.round(eligibleArea * rate);
+        const diff = Math.abs(actualAmount - expectedAmount);
+
+        if (diff > tolerance) {
+          rateMismatchCount++;
+          const currentCell = validationGrid[r][amountColIdx];
+          validationGrid[r][amountColIdx] = {
+            isValid: false,
+            reason: `⚠️ अनुदानात तफावत: क्षेत्रानुसार अपेक्षित रक्कम ₹ ${expectedAmount.toLocaleString()} (दर ₹ ${rate.toLocaleString()}/हे.), पण यादीत ₹ ${actualAmount.toLocaleString()} आहे (तफावत: ₹ ${diff.toLocaleString()})`,
+            originalValue: currentCell?.originalValue ?? cleanedRows[r][amountColIdx],
+            cleanedValue: cleanedRows[r][amountColIdx],
+            isModified: currentCell?.isModified ?? false,
+          };
+        }
+      }
+    }
+  }
+
   // Separate rows into 1. Correct (100% Valid, zero blanks, zero errors) and 2. Incorrect
   const correctRows: any[][] = [];
   const incorrectRows: any[][] = [];
@@ -657,6 +789,10 @@ export function processDataset(
     invalidAmounts: invalidAmountsCount,
     banksStandardized: banksStandardizedCount,
     changedCellsCount: changedRecords.length,
+    duplicateAadhaarCount,
+    duplicateAccountCount,
+    duplicateRowIndices: Array.from(duplicateRowIndexSet),
+    rateMismatchCount,
     columnBlankStats,
   };
 

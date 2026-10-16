@@ -1,6 +1,6 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { CellValidationDetail, FileItem } from '../types/dataCleaner';
+import { CellValidationDetail, FileItem, VillageSplitSummary } from '../types/dataCleaner';
 
 /**
  * Detect Village Name from Dataset or Original File Name
@@ -432,4 +432,253 @@ export async function downloadFilesDirectlyWithoutZip(
       await new Promise((res) => setTimeout(res, 250));
     }
   }
+}
+
+/**
+ * Requirement 'क': गावनिहाय किंवा साझानिहाय स्वतंत्र फाईल्समध्ये आपोआप विभाजन (Auto-Split by Village)
+ * Groups dataset rows by unique village and generates independent clean files with auto-incremented Sr.Nos.
+ */
+export function splitDatasetByVillage(
+  file: FileItem,
+  targetFormat: 'xlsx' | 'csv' = 'xlsx'
+): VillageSplitSummary[] {
+  const headers = file.headers;
+  const sourceRows = (file.cleanedData && file.cleanedData.length > 0)
+    ? file.cleanedData
+    : file.originalData;
+  const validationGrid = file.validationGrid;
+
+  if (!sourceRows || sourceRows.length === 0) return [];
+
+  // Find Village Column
+  const villageColIdx = headers.findIndex((h) =>
+    /(गाव|गावाचे\s*नाव|village|farmers_village|grampanchayat|गाव_नाव)/i.test(
+      h.trim().replace(/[\s\.\-_]+/g, '')
+    )
+  );
+
+  // Find Area and Amount Column Indices
+  const areaIndices = findAreaColIndices(headers);
+  const amountIndices = findAmountColIndices(headers);
+
+  // Group rows by village name
+  const groups: {
+    [village: string]: {
+      rows: any[][];
+      vGrid: (CellValidationDetail | null)[][];
+    };
+  } = {};
+
+  for (let r = 0; r < sourceRows.length; r++) {
+    const row = sourceRows[r];
+    const rawVillage = villageColIdx !== -1 ? String(row[villageColIdx] || '').trim() : '';
+    const villageName = rawVillage || detectVillageOrBaseName(file) || 'गावनिहाय_डेटा';
+
+    if (!groups[villageName]) {
+      groups[villageName] = { rows: [], vGrid: [] };
+    }
+    groups[villageName].rows.push(row);
+    if (validationGrid && validationGrid[r]) {
+      groups[villageName].vGrid.push(validationGrid[r]);
+    }
+  }
+
+  const summaries: VillageSplitSummary[] = [];
+
+  for (const [villageName, grp] of Object.entries(groups)) {
+    let correctCount = 0;
+    let incorrectCount = 0;
+    let totalArea = 0;
+    let totalAmount = 0;
+
+    for (let i = 0; i < grp.rows.length; i++) {
+      const vRow = grp.vGrid[i];
+      const isIncorrect = vRow ? vRow.some((c) => c && !c.isValid) : false;
+      if (isIncorrect) {
+        incorrectCount++;
+      } else {
+        correctCount++;
+      }
+
+      // Sum area
+      for (const aIdx of areaIndices) {
+        const val = parseFloat(String(grp.rows[i][aIdx] || '0').replace(/,/g, ''));
+        if (!isNaN(val)) totalArea += val;
+      }
+      // Sum amount
+      for (const mIdx of amountIndices) {
+        const val = parseFloat(String(grp.rows[i][mIdx] || '0').replace(/[₹\$\,\s]/g, ''));
+        if (!isNaN(val)) totalAmount += val;
+      }
+    }
+
+    const cleanSafeVillage = villageName.replace(/[/\\?%*:|"<>]/g, '_').trim();
+    const filename = `${cleanSafeVillage}_गाव_यादी.${targetFormat}`;
+
+    const blob =
+      targetFormat === 'csv'
+        ? generateDatasetCsvBlob(headers, grp.rows, grp.vGrid, false)
+        : generateDatasetExcelBlob(headers, grp.rows, grp.vGrid, cleanSafeVillage.slice(0, 30), false);
+
+    summaries.push({
+      villageName,
+      rowCount: grp.rows.length,
+      correctCount,
+      incorrectCount,
+      totalArea: Math.round(totalArea * 100) / 100,
+      totalAmount: Math.round(totalAmount),
+      blob,
+      filename,
+    });
+  }
+
+  // Sort alphabetically by village name
+  return summaries.sort((a, b) => a.villageName.localeCompare(b.villageName, 'mr'));
+}
+
+/**
+ * Requirement 'ड': ग्रामपंचायत सूचना फलकासाठी 'त्रुटी यादी' (Missing Detail Notice List for Gram Panchayat)
+ * Generates an official notice formatted table containing only incomplete or defective records
+ * ready for Gram Panchayat notice boards or distribution to Gram Sevaks / Talathis.
+ */
+export function generateGramPanchayatNoticeBlob(
+  file: FileItem,
+  targetFormat: 'xlsx' | 'csv' = 'xlsx'
+): {
+  blob: Blob;
+  filename: string;
+  totalDefects: number;
+  noticeRows: any[][];
+} {
+  const headers = file.headers;
+  const sourceRows = (file.cleanedData && file.cleanedData.length > 0)
+    ? file.cleanedData
+    : file.originalData;
+  const validationGrid = file.validationGrid;
+
+  // Identify key columns
+  const nameColIdx = headers.findIndex((h) => /(name|शेतकरी|खातेदार|लाभार्थी|अर्जदार)/i.test(h));
+  const villageColIdx = headers.findIndex((h) => /(गाव|village|ग्रामपंचायत)/i.test(h));
+  const gatColIdx = headers.findIndex((h) => /(gat|survey|गट|सर्व्हे|खसरा)/i.test(h));
+  const bankColIdx = headers.findIndex((h) => /(bank|बँक)/i.test(h) && !/(खाते|account)/i.test(h));
+  const ifscColIdx = headers.findIndex((h) => /(ifsc|आयएफएससी)/i.test(h));
+  const accountColIdx = headers.findIndex((h) => /(account|खाते)/i.test(h));
+  const mobileColIdx = headers.findIndex((h) => /(mobile|phone|मोबाईल|भ्रमणध्वनी)/i.test(h));
+  const aadhaarColIdx = headers.findIndex((h) => /(aadhaar|aadhar|आधार)/i.test(h));
+
+  const noticeHeaders = [
+    'अ.क्र.',
+    'खातेदार / शेतकऱ्याचे नाव',
+    'गाव',
+    'गट / सर्व्हे क्र.',
+    'नोंदवलेली बँक व शाखा',
+    'त्रुटीचे स्वरूप (Defect Reason)',
+    'ग्रामपंचायतीत जमा करावयाचे आवश्यक कागदपत्र (Action Required)',
+    'शेतकऱ्याची स्वाक्षरी / शेरा',
+  ];
+
+  const noticeRows: any[][] = [];
+  let seq = 1;
+
+  for (let r = 0; r < sourceRows.length; r++) {
+    const vRow = validationGrid ? validationGrid[r] : null;
+    if (!vRow) continue;
+
+    const errorCells = vRow
+      .map((cell, cIdx) => (!cell?.isValid ? { column: headers[cIdx], reason: cell?.reason } : null))
+      .filter(Boolean);
+
+    if (errorCells.length > 0) {
+      const farmerName = nameColIdx !== -1 ? String(sourceRows[r][nameColIdx] || '').trim() : `नोंद #${r + 1}`;
+      const village = villageColIdx !== -1 ? String(sourceRows[r][villageColIdx] || '').trim() : detectVillageOrBaseName(file);
+      const gat = gatColIdx !== -1 ? String(sourceRows[r][gatColIdx] || '').trim() : '-';
+      const bank = bankColIdx !== -1 ? String(sourceRows[r][bankColIdx] || '').trim() : '-';
+
+      // Categorize defects & required documents
+      const defectDescriptions: string[] = [];
+      const requiredDocs: string[] = [];
+
+      errorCells.forEach((err) => {
+        if (!err) return;
+        const colLower = err.column.toLowerCase();
+        if (/aadhaar|aadhar|आधार/.test(colLower)) {
+          defectDescriptions.push('आधार क्रमांक चुकीचा किंवा अपूर्ण');
+          requiredDocs.push('आधार कार्ड झेरॉक्स');
+        } else if (/account|खाते/.test(colLower)) {
+          defectDescriptions.push('बँक खाते क्रमांक चुकीचा किंवा अपूर्ण');
+          requiredDocs.push('बँक पासबुक पहिल्या पानाची प्रत');
+        } else if (/ifsc|आयएफएससी/.test(colLower)) {
+          defectDescriptions.push('बँक IFSC कोड अवैध');
+          requiredDocs.push('बँक पासबुक / चेक प्रत');
+        } else if (/mobile|मोबाईल/.test(colLower)) {
+          defectDescriptions.push('मोबाईल क्रमांक १० अंकी नाही');
+          requiredDocs.push('सक्रिय मोबाईल नंबर देणे');
+        } else {
+          defectDescriptions.push(`${err.column}: ${err.reason || 'त्रुटी'}`);
+          requiredDocs.push('संबधित अधिकृत कागदपत्र');
+        }
+      });
+
+      const uniqueDocs = Array.from(new Set(requiredDocs)).join(' + ');
+
+      noticeRows.push([
+        seq++,
+        farmerName,
+        village,
+        gat,
+        bank,
+        defectDescriptions.join('; '),
+        uniqueDocs,
+        '',
+      ]);
+    }
+  }
+
+  const baseName = detectVillageOrBaseName(file);
+  const filename = `${baseName}_ग्रामपंचायत_त्रुटी_दुरुस्ती_नोटीस.${targetFormat}`;
+
+  let blob: Blob;
+  if (targetFormat === 'csv') {
+    const csvData = [
+      ['महाराष्ट्र शासन - महसूल व कृषी विभाग: ग्रामपंचायत सूचना फलक त्रुटी पूर्तता नोटीस'],
+      ['खालील खातेदारांनी आपली बँक खाते, आधार किंवा मोबाईल त्रुटी त्वरित ग्रामपंचायत / तलाठी कार्यालयात जमा करावी.'],
+      [],
+      noticeHeaders,
+      ...noticeRows,
+    ];
+    const csvString = Papa.unparse(csvData);
+    blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  } else {
+    const wb = XLSX.utils.book_new();
+    const wsData = [
+      ['महाराष्ट्र शासन - महसूल व कृषी विभाग: ग्रामपंचायत सूचना फलक त्रुटी पूर्तता नोटीस'],
+      ['खालील खातेदारांनी आपली बँक खाते, आधार किंवा मोबाईल त्रुटी त्वरित ग्रामपंचायत / तलाठी कार्यालयात जमा करावी.'],
+      [],
+      noticeHeaders,
+      ...noticeRows,
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [
+      { wch: 8 },
+      { wch: 28 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 22 },
+      { wch: 38 },
+      { wch: 32 },
+      { wch: 20 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'त्रुटी_सूचना_फलक');
+    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    blob = new Blob([excelBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+  }
+
+  return {
+    blob,
+    filename,
+    totalDefects: noticeRows.length,
+    noticeRows,
+  };
 }
